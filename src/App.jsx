@@ -389,68 +389,321 @@ function NavBtn({ children, onClick, accent, outline }) {
   );
 }
 
-// ── Landing / Auth Page (split screen) ───────────────────────────────────
-function LandingPage({ users, setUsers, setCurrentUser, nav, notify }) {
-  const [tab, setTab] = useState("login"); // login | register
-  // login state
+// ── Landing / Auth Page ──────────────────────────────────────────────────
+function useIsMobile() {
+  const [mobile, setMobile] = useState(window.innerWidth < 768);
+  useEffect(() => {
+    const h = () => setMobile(window.innerWidth < 768);
+    window.addEventListener("resize", h);
+    return () => window.removeEventListener("resize", h);
+  }, []);
+  return mobile;
+}
+
+function LandingPage({ login, register, nav, notify }) {
+  const isMobile = useIsMobile();
+  const [tab, setTab] = useState("login");
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
-  // register state
   const [rName, setRName] = useState("");
   const [rEmail, setREmail] = useState("");
   const [rPw, setRPw] = useState("");
   const [rPw2, setRPw2] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  const login = () => {
-    const u = users.find((u) => u.email === email && u.password === pw);
-    if (!u) return notify("Имэйл эсвэл нууц үг буруу", "error");
-    if (!u.approved)
-      return notify(
-        "Таны бүртгэл баталгаажаагүй байна. Админ хянаж байна.",
-        "error",
-      );
-    setCurrentUser(u);
-    notify("Тавтай морил, " + u.name + "!");
-    nav(u.role === "admin" ? "admin" : "catalog");
+  const doLogin = async () => {
+    setLoading(true);
+    await login(email, pw);
+    setLoading(false);
   };
 
-  const register = () => {
+  const doRegister = async () => {
     if (!rName || !rEmail || !rPw)
       return notify("Бүх талбарыг бөглөнө үү", "error");
     if (rPw !== rPw2) return notify("Нууц үг таарахгүй байна", "error");
-    if (users.find((u) => u.email === rEmail))
-      return notify("Энэ имэйл бүртгэлтэй байна", "error");
-    setUsers((prev) => [
-      ...prev,
-      {
-        id: Date.now(),
-        name: rName,
-        email: rEmail,
-        password: rPw,
-        role: "user",
-        approved: false,
-      },
-    ]);
-    notify("Бүртгэл амжилттай! Админ баталгаажуулна хүртэл хүлээнэ үү.");
+    if (rPw.length < 6)
+      return notify("Нууц үг хамгийн багадаа 6 тэмдэгт байна", "error");
+    setLoading(true);
+    await register(rName, rEmail, rPw);
+    setLoading(false);
     setTab("login");
+    setRName("");
+    setREmail("");
+    setRPw("");
+    setRPw2("");
   };
 
-  const features = [
-    { icon: "📂", text: "Байгууллагуудыг ангилалаар харах" },
-    { icon: "🏢", text: "Байгууллагын дэлгэрэнгүй мэдээлэл" },
-    { icon: "👥", text: "Ажилчид болон үйл ажиллагаа" },
-    { icon: "✨", text: "Өөрийн байгууллагаа бүртгэх" },
-  ];
+  // ── Mobile layout ───────────────────────────────────────────────────────
+  if (isMobile) {
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          background: "#fff",
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
+        {/* Compact branded header */}
+        <div
+          style={{
+            background: "linear-gradient(135deg, #4f46e5, #7c3aed)",
+            padding: "28px 24px 32px",
+            color: "#fff",
+            textAlign: "center",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 10,
+              marginBottom: 12,
+            }}
+          >
+            <div
+              style={{
+                width: 36,
+                height: 36,
+                background: "rgba(255,255,255,.2)",
+                borderRadius: 10,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: 20,
+              }}
+            >
+              🏛️
+            </div>
+            <span style={{ fontWeight: 800, fontSize: 20 }}>
+              OrgHub <span style={{ opacity: 0.7 }}>Mongolia</span>
+            </span>
+          </div>
+          <p style={{ fontSize: 13, opacity: 0.75, lineHeight: 1.5 }}>
+            Байгууллагийн нэгдсэн мэдээллийн сан
+          </p>
+        </div>
 
+        {/* Form area */}
+        <div style={{ flex: 1, padding: "28px 20px 40px", background: "#fff" }}>
+          {/* Tab switcher */}
+          <div
+            style={{
+              display: "flex",
+              background: "#f1f5f9",
+              borderRadius: 12,
+              padding: 4,
+              marginBottom: 28,
+              border: "1px solid #e2e8f0",
+            }}
+          >
+            {[
+              ["login", "Нэвтрэх"],
+              ["register", "Бүртгүүлэх"],
+            ].map(([t, label]) => (
+              <button
+                key={t}
+                onClick={() => setTab(t)}
+                style={{
+                  flex: 1,
+                  padding: "11px 0",
+                  borderRadius: 9,
+                  fontWeight: 700,
+                  fontSize: 15,
+                  border: "none",
+                  background: tab === t ? "#fff" : "transparent",
+                  color: tab === t ? "#6366f1" : "#64748b",
+                  boxShadow: tab === t ? "0 1px 6px rgba(0,0,0,.1)" : "none",
+                  transition: "all .2s",
+                  cursor: "pointer",
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {tab === "login" ? (
+            <div>
+              <h2
+                style={{
+                  fontSize: 24,
+                  fontWeight: 800,
+                  color: "#111827",
+                  marginBottom: 4,
+                }}
+              >
+                Тавтай морил
+              </h2>
+              <p style={{ color: "#6b7280", fontSize: 14, marginBottom: 24 }}>
+                Данснаасаа нэвтэрнэ үү
+              </p>
+              <MField
+                label="Имэйл хаяг"
+                value={email}
+                onChange={setEmail}
+                placeholder="name@company.mn"
+                type="email"
+              />
+              <MField
+                label="Нууц үг"
+                value={pw}
+                onChange={setPw}
+                placeholder="••••••••"
+                type="password"
+              />
+              <button
+                onClick={() => nav("forgotpw")}
+                style={{
+                  background: "none",
+                  border: "none",
+                  color: "#6366f1",
+                  fontSize: 14,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  marginBottom: 20,
+                  display: "block",
+                }}
+              >
+                Нууц үг мартсан уу?
+              </button>
+              <button
+                onClick={doLogin}
+                disabled={loading}
+                style={{
+                  width: "100%",
+                  background: loading
+                    ? "#c7d2fe"
+                    : "linear-gradient(135deg, #6366f1, #8b5cf6)",
+                  color: "#fff",
+                  padding: "15px",
+                  borderRadius: 12,
+                  fontWeight: 700,
+                  fontSize: 16,
+                  border: "none",
+                  cursor: loading ? "not-allowed" : "pointer",
+                  marginBottom: 20,
+                }}
+              >
+                {loading ? "Нэвтэрж байна..." : "Нэвтрэх →"}
+              </button>
+              <p
+                style={{ textAlign: "center", color: "#6b7280", fontSize: 14 }}
+              >
+                Бүртгэл байхгүй юу?{" "}
+                <span
+                  style={{
+                    color: "#6366f1",
+                    fontWeight: 700,
+                    cursor: "pointer",
+                  }}
+                  onClick={() => setTab("register")}
+                >
+                  Бүртгүүлэх
+                </span>
+              </p>
+            </div>
+          ) : (
+            <div>
+              <h2
+                style={{
+                  fontSize: 24,
+                  fontWeight: 800,
+                  color: "#111827",
+                  marginBottom: 4,
+                }}
+              >
+                Шинэ бүртгэл
+              </h2>
+              <p style={{ color: "#6b7280", fontSize: 14, marginBottom: 16 }}>
+                Мэдээллээ оруулж бүртгүүлнэ үү
+              </p>
+              <div
+                style={{
+                  background: "#fef3c7",
+                  border: "1px solid #fcd34d",
+                  borderRadius: 10,
+                  padding: "10px 14px",
+                  marginBottom: 20,
+                  fontSize: 13,
+                  color: "#92400e",
+                }}
+              >
+                ⚠️ Бүртгэл үүсгэсний дараа <b>админ баталгаажуулна</b>.
+              </div>
+              <MField
+                label="Нэр"
+                value={rName}
+                onChange={setRName}
+                placeholder="Таны бүтэн нэр"
+              />
+              <MField
+                label="Имэйл хаяг"
+                value={rEmail}
+                onChange={setREmail}
+                placeholder="name@company.mn"
+                type="email"
+              />
+              <MField
+                label="Нууц үг (6+)"
+                value={rPw}
+                onChange={setRPw}
+                placeholder="••••••••"
+                type="password"
+              />
+              <MField
+                label="Нууц үг давтах"
+                value={rPw2}
+                onChange={setRPw2}
+                placeholder="••••••••"
+                type="password"
+              />
+              <button
+                onClick={doRegister}
+                disabled={loading}
+                style={{
+                  width: "100%",
+                  background: loading
+                    ? "#c7d2fe"
+                    : "linear-gradient(135deg, #6366f1, #8b5cf6)",
+                  color: "#fff",
+                  padding: "15px",
+                  borderRadius: 12,
+                  fontWeight: 700,
+                  fontSize: 16,
+                  border: "none",
+                  cursor: loading ? "not-allowed" : "pointer",
+                  marginBottom: 20,
+                }}
+              >
+                {loading ? "Бүртгэж байна..." : "Бүртгүүлэх →"}
+              </button>
+              <p
+                style={{ textAlign: "center", color: "#6b7280", fontSize: 14 }}
+              >
+                Бүртгэлтэй юу?{" "}
+                <span
+                  style={{
+                    color: "#6366f1",
+                    fontWeight: 700,
+                    cursor: "pointer",
+                  }}
+                  onClick={() => setTab("login")}
+                >
+                  Нэвтрэх
+                </span>
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ── Desktop split layout ────────────────────────────────────────────────
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        display: "flex",
-        fontFamily: "'Segoe UI', sans-serif",
-      }}
-    >
-      {/* Left — branding */}
+    <div style={{ minHeight: "100vh", display: "flex" }}>
       <div
         style={{
           flex: "0 0 50%",
@@ -465,7 +718,6 @@ function LandingPage({ users, setUsers, setCurrentUser, nav, notify }) {
           overflow: "hidden",
         }}
       >
-        {/* decorative circles */}
         <div
           style={{
             position: "absolute",
@@ -488,7 +740,6 @@ function LandingPage({ users, setUsers, setCurrentUser, nav, notify }) {
             background: "rgba(255,255,255,.06)",
           }}
         />
-
         <div
           style={{
             display: "flex",
@@ -498,11 +749,10 @@ function LandingPage({ users, setUsers, setCurrentUser, nav, notify }) {
           }}
         >
           <span style={{ fontSize: 36 }}>🏛️</span>
-          <span style={{ fontWeight: 900, fontSize: 22, letterSpacing: -0.5 }}>
+          <span style={{ fontWeight: 900, fontSize: 22 }}>
             OrgHub <span style={{ opacity: 0.75 }}>Mongolia</span>
           </span>
         </div>
-
         <h1
           style={{
             fontSize: 38,
@@ -528,12 +778,13 @@ function LandingPage({ users, setUsers, setCurrentUser, nav, notify }) {
           Байгууллагуудын мэдээлэл, үйл ажиллагаа, ажилчдыг нэг дороос харах
           боломжтой платформ.
         </p>
-
-        <div
-          className="landing-features"
-          style={{ display: "flex", flexDirection: "column", gap: 14 }}
-        >
-          {features.map((f, i) => (
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          {[
+            ["📂", "Байгууллагуудыг ангилалаар харах"],
+            ["🏢", "Байгууллагын дэлгэрэнгүй мэдээлэл"],
+            ["👥", "Ажилчид болон үйл ажиллагаа"],
+            ["✨", "Өөрийн байгууллагаа бүртгэх"],
+          ].map(([icon, text], i) => (
             <div
               key={i}
               style={{ display: "flex", alignItems: "center", gap: 12 }}
@@ -551,15 +802,14 @@ function LandingPage({ users, setUsers, setCurrentUser, nav, notify }) {
                   flexShrink: 0,
                 }}
               >
-                {f.icon}
+                {icon}
               </div>
-              <span style={{ fontSize: 15, opacity: 0.9 }}>{f.text}</span>
+              <span style={{ fontSize: 15, opacity: 0.9 }}>{text}</span>
             </div>
           ))}
         </div>
       </div>
 
-      {/* Right — auth form */}
       <div
         style={{
           flex: 1,
@@ -571,7 +821,6 @@ function LandingPage({ users, setUsers, setCurrentUser, nav, notify }) {
         }}
       >
         <div style={{ width: "100%", maxWidth: 420 }}>
-          {/* Tab switcher */}
           <div
             style={{
               display: "flex",
@@ -599,6 +848,7 @@ function LandingPage({ users, setUsers, setCurrentUser, nav, notify }) {
                   color: tab === t ? "#4f46e5" : "#64748b",
                   boxShadow: tab === t ? "0 1px 6px rgba(0,0,0,.1)" : "none",
                   transition: "all .2s",
+                  cursor: "pointer",
                 }}
               >
                 {label}
@@ -607,7 +857,7 @@ function LandingPage({ users, setUsers, setCurrentUser, nav, notify }) {
           </div>
 
           {tab === "login" ? (
-            <div style={{ animation: "fadeUp .3s ease" }}>
+            <div>
               <h2
                 style={{
                   fontSize: 26,
@@ -619,7 +869,7 @@ function LandingPage({ users, setUsers, setCurrentUser, nav, notify }) {
                 Тавтай морил!
               </h2>
               <p style={{ color: "#94a3b8", fontSize: 14, marginBottom: 28 }}>
-                Бүртгэлтэй данснаасаа нэвтэрнэ үү
+                Данснаасаа нэвтэрнэ үү
               </p>
               <FormField
                 label="Имэйл хаяг"
@@ -650,7 +900,9 @@ function LandingPage({ users, setUsers, setCurrentUser, nav, notify }) {
               >
                 Нууц үг мартсан уу?
               </button>
-              <PrimaryBtn onClick={login}>Нэвтрэх →</PrimaryBtn>
+              <PrimaryBtn onClick={doLogin} disabled={loading}>
+                {loading ? "Нэвтэрж байна..." : "Нэвтрэх →"}
+              </PrimaryBtn>
               <p
                 style={{
                   textAlign: "center",
@@ -673,7 +925,7 @@ function LandingPage({ users, setUsers, setCurrentUser, nav, notify }) {
               </p>
             </div>
           ) : (
-            <div style={{ animation: "fadeUp .3s ease" }}>
+            <div>
               <h2
                 style={{
                   fontSize: 26,
@@ -715,7 +967,7 @@ function LandingPage({ users, setUsers, setCurrentUser, nav, notify }) {
                 type="email"
               />
               <FormField
-                label="Нууц үг"
+                label="Нууц үг (6+ тэмдэгт)"
                 value={rPw}
                 onChange={setRPw}
                 placeholder="••••••••"
@@ -728,7 +980,9 @@ function LandingPage({ users, setUsers, setCurrentUser, nav, notify }) {
                 placeholder="••••••••"
                 type="password"
               />
-              <PrimaryBtn onClick={register}>Бүртгүүлэх →</PrimaryBtn>
+              <PrimaryBtn onClick={doRegister} disabled={loading}>
+                {loading ? "Бүртгэж байна..." : "Бүртгүүлэх →"}
+              </PrimaryBtn>
               <p
                 style={{
                   textAlign: "center",
@@ -757,64 +1011,40 @@ function LandingPage({ users, setUsers, setCurrentUser, nav, notify }) {
   );
 }
 
-function OrgCard({ org, categories, onClick }) {
-  const cat = categories.find((c) => c.id === org.categoryId);
+// ── Mobile form field helper ──────────────────────────────────────────────
+function MField({ label, value, onChange, placeholder, type = "text" }) {
   return (
-    <div
-      onClick={onClick}
-      style={{
-        background: "#fff",
-        borderRadius: 16,
-        padding: 24,
-        cursor: "pointer",
-        border: "1.5px solid #e2e8f0",
-        transition: "all .2s",
-        boxShadow: "0 2px 8px rgba(0,0,0,.04)",
-      }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.boxShadow = "0 8px 30px rgba(99,102,241,.12)";
-        e.currentTarget.style.borderColor = "#6366f1";
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.boxShadow = "0 2px 8px rgba(0,0,0,.04)";
-        e.currentTarget.style.borderColor = "#e2e8f0";
-      }}
-    >
-      <div
+    <div style={{ marginBottom: 16 }}>
+      <label
         style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 12,
-          marginBottom: 12,
+          display: "block",
+          fontWeight: 600,
+          marginBottom: 6,
+          color: "#374151",
+          fontSize: 14,
         }}
       >
-        <LogoDisplay logo={org.logo} size={56} radius={12} />
-        <div>
-          <div style={{ fontWeight: 800, fontSize: 16, color: "#1e293b" }}>
-            {org.name}
-          </div>
-          {cat && (
-            <span
-              style={{
-                fontSize: 12,
-                background: cat.color + "20",
-                color: cat.color,
-                padding: "2px 8px",
-                borderRadius: 20,
-                fontWeight: 600,
-              }}
-            >
-              {cat.icon} {cat.name}
-            </span>
-          )}
-        </div>
-      </div>
-      <p style={{ fontSize: 14, color: "#64748b", lineHeight: 1.5 }}>
-        {org.tagline}
-      </p>
-      <div style={{ marginTop: 12, fontSize: 12, color: "#94a3b8" }}>
-        👥 {org.employees?.length || 0} ажилтан мэдэгдсэн
-      </div>
+        {label}
+      </label>
+      <input
+        type={type}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        style={{
+          width: "100%",
+          padding: "13px 16px",
+          border: "1.5px solid #e2e8f0",
+          borderRadius: 10,
+          fontSize: 15,
+          color: "#111827",
+          background: "#fff",
+          outline: "none",
+          transition: "border-color .2s",
+        }}
+        onFocus={(e) => (e.target.style.borderColor = "#6366f1")}
+        onBlur={(e) => (e.target.style.borderColor = "#e2e8f0")}
+      />
     </div>
   );
 }
