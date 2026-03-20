@@ -54,19 +54,68 @@ const INIT_USERS = [
 const uid = () => Math.random().toString(36).slice(2, 9);
 
 // ── Main App ──────────────────────────────────────────────────────────────
+// Cache user profile to avoid redundant Firestore reads
+const userCache = {};
+
 export default function App() {
-  const [users, setUsers] = useState(INIT_USERS);
-  const [orgs, setOrgs] = useState(INIT_ORGS);
   const [currentUser, setCurrentUser] = useState(null);
-  const [page, setPage] = useState("home"); // home | login | register | catalog | org | dashboard | addOrg | admin
+  const [authLoading, setAuthLoading] = useState(true);
+  const [orgs, setOrgs] = useState([]);
+  const [users, setUsers] = useState([]);
+  const [page, setPage] = useState("home");
   const [selectedCat, setSelectedCat] = useState(null);
   const [selectedOrg, setSelectedOrg] = useState(null);
-  const [pendingUsers, setPendingUsers] = useState([]);
   const [notification, setNotification] = useState(null);
+  const justLoggedIn = useRef(false); // skip onAuthStateChanged re-read after login
 
+  // ── Auth listener ─────────────────────────────────────────────────────
   useEffect(() => {
-    setPendingUsers(users.filter((u) => !u.approved && u.role !== "admin"));
-  }, [users]);
+    const unsub = onAuthStateChanged(auth, async (fu) => {
+      if (fu) {
+        if (justLoggedIn.current) {
+          // Already set by login() — skip extra Firestore read
+          justLoggedIn.current = false;
+          setAuthLoading(false);
+          return;
+        }
+        // Page refresh: load from cache first, then Firestore
+        if (userCache[fu.uid]) {
+          setCurrentUser(userCache[fu.uid]);
+          setAuthLoading(false);
+          return;
+        }
+        const snap = await getDoc(doc(db, "users", fu.uid));
+        if (snap.exists()) {
+          const data = { uid: fu.uid, ...snap.data() };
+          userCache[fu.uid] = data;
+          setCurrentUser(data);
+        } else {
+          setCurrentUser(null);
+        }
+      } else {
+        setCurrentUser(null);
+      }
+      setAuthLoading(false);
+    });
+    return unsub;
+  }, []);
+
+  // ── Realtime orgs ─────────────────────────────────────────────────────
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "orgs"), (snap) =>
+      setOrgs(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
+    );
+    return unsub;
+  }, []);
+
+  // ── Admin: realtime users ─────────────────────────────────────────────
+  useEffect(() => {
+    if (!currentUser || currentUser.role !== "admin") return;
+    const unsub = onSnapshot(collection(db, "users"), (snap) =>
+      setUsers(snap.docs.map((d) => ({ uid: d.id, ...d.data() }))),
+    );
+    return unsub;
+  }, [currentUser?.role]);
 
   const notify = (msg, type = "success") => {
     setNotification({ msg, type });
@@ -80,81 +129,171 @@ export default function App() {
     window.scrollTo(0, 0);
   };
 
-  const logout = () => {
+  // ── Login: fast path — set user immediately, skip onAuthStateChanged re-read
+  const login = async (email, password) => {
+    try {
+      const cred = await signInWithEmailAndPassword(auth, email, password);
+      const snap = await getDoc(doc(db, "users", cred.user.uid));
+      if (!snap.exists()) {
+        await signOut(auth);
+        return notify("Хэрэглэгч олдсонгүй", "error");
+      }
+      const data = snap.data();
+      if (!data.approved) {
+        await signOut(auth);
+        return notify(
+          "Бүртгэл баталгаажаагүй байна. Админ хянаж байна.",
+          "error",
+        );
+      }
+      const user = { uid: cred.user.uid, ...data };
+      userCache[cred.user.uid] = user;
+      justLoggedIn.current = true; // tell onAuthStateChanged to skip
+      setCurrentUser(user);
+      notify(`Тавтай морил, ${data.name}! 👋`);
+      nav(data.role === "admin" ? "admin" : "catalog");
+    } catch (e) {
+      notify(
+        e.code === "auth/invalid-credential"
+          ? "Имэйл эсвэл нууц үг буруу"
+          : e.message,
+        "error",
+      );
+    }
+  };
+
+  const register = async (name, email, password) => {
+    try {
+      const cred = await createUserWithEmailAndPassword(auth, email, password);
+      await setDoc(doc(db, "users", cred.user.uid), {
+        name,
+        email,
+        role: "user",
+        approved: false,
+        createdAt: serverTimestamp(),
+      });
+      await signOut(auth);
+      notify("Бүртгэл амжилттай! Админ баталгаажуулна хүртэл хүлээнэ үү.");
+    } catch (e) {
+      if (e.code === "auth/email-already-in-use")
+        notify("Энэ имэйл бүртгэлтэй байна", "error");
+      else notify(e.message, "error");
+    }
+  };
+
+  const logout = async () => {
+    await signOut(auth);
     setCurrentUser(null);
     setPage("home");
     notify("Системээс гарлаа");
   };
 
-  const approveUser = (id) => {
-    setUsers((prev) =>
-      prev.map((u) => (u.id === id ? { ...u, approved: true } : u)),
-    );
+  const forgotPassword = async (email) => {
+    try {
+      await sendPasswordResetEmail(auth, email);
+      notify("Нууц үг сэргээх холбоос илгээгдлээ ✉️");
+    } catch {
+      notify("Имэйл олдсонгүй", "error");
+    }
+  };
+
+  // ── CRUD ──────────────────────────────────────────────────────────────
+  const approveUser = async (uid) => {
+    await updateDoc(doc(db, "users", uid), { approved: true });
     notify("Хэрэглэгч баталгаажлаа ✓");
   };
-
-  const rejectUser = (id) => {
-    setUsers((prev) => prev.filter((u) => u.id !== id));
+  const rejectUser = async (uid) => {
+    await deleteDoc(doc(db, "users", uid));
     notify("Хэрэглэгч устгагдлаа", "error");
   };
-
-  const approveOrg = (id) => {
-    setOrgs((prev) =>
-      prev.map((o) => (o.id === id ? { ...o, approved: true } : o)),
-    );
+  const approveOrg = async (id) => {
+    await updateDoc(doc(db, "orgs", id), { approved: true });
     notify("Байгууллага баталгаажлаа ✓");
   };
-
-  const rejectOrg = (id) => {
-    setOrgs((prev) => prev.filter((o) => o.id !== id));
+  const rejectOrg = async (id) => {
+    await deleteDoc(doc(db, "orgs", id));
     notify("Байгууллага татгалзагдлаа", "error");
   };
+  const deleteOrg = async (id) => {
+    await deleteDoc(doc(db, "orgs", id));
+    notify("Байгууллага устгагдлаа", "error");
+  };
 
-  const addOrg = (data) => {
-    const newOrg = {
+  const addOrg = async (data) => {
+    await addDoc(collection(db, "orgs"), {
       ...data,
-      id: Date.now(),
       approved: false,
-      ownerId: currentUser.id,
+      ownerId: currentUser.uid,
       employees: [],
       activities: [],
-    };
-    setOrgs((prev) => [...prev, newOrg]);
+      createdAt: serverTimestamp(),
+    });
     notify("Байгууллага бүртгэгдлээ. Админ баталгаажуулна.");
     nav("dashboard");
   };
 
-  const updateOrg = (id, data) => {
-    setOrgs((prev) => prev.map((o) => (o.id === id ? { ...o, ...data } : o)));
-    notify("Мэдээлэл шинэчлэгдлээ ✓");
-  };
-
-  const deleteOrg = (id) => {
-    setOrgs((prev) => prev.filter((o) => o.id !== id));
-    notify("Байгууллага устгагдлаа", "error");
+  const updateOrg = async (id, data) => {
+    const clean = Object.fromEntries(
+      Object.entries(data).filter(([, v]) => v !== undefined),
+    );
+    await updateDoc(doc(db, "orgs", id), clean);
+    notify("Хадгалагдлаа ✓");
   };
 
   const myOrgs = currentUser
-    ? orgs.filter((o) => o.ownerId === currentUser.id)
+    ? orgs.filter((o) => o.ownerId === currentUser.uid)
     : [];
   const approvedOrgs = orgs.filter((o) => o.approved);
+  const pendingUsers = users.filter((u) => !u.approved && u.role !== "admin");
 
-  // Auth guard: non-logged-in users only see landing/auth pages
   const PROTECTED = ["catalog", "org", "dashboard", "addOrg", "admin"];
   const effectivePage =
     !currentUser && PROTECTED.includes(page) ? "home" : page;
 
+  // ── Loading splash ────────────────────────────────────────────────────
+  if (authLoading)
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          background: "#f8fafc",
+        }}
+      >
+        <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+        <div style={{ textAlign: "center" }}>
+          <div
+            style={{
+              width: 40,
+              height: 40,
+              border: "3px solid #e2e8f0",
+              borderTop: "3px solid #6366f1",
+              borderRadius: "50%",
+              animation: "spin .8s linear infinite",
+              margin: "0 auto 16px",
+            }}
+          ></div>
+          <div style={{ color: "#64748b", fontWeight: 600, fontSize: 15 }}>
+            Нэвтэрч байна...
+          </div>
+        </div>
+      </div>
+    );
+
   const pages = {
     home: (
       <LandingPage
-        users={users}
-        setUsers={setUsers}
-        setCurrentUser={setCurrentUser}
+        login={login}
+        register={register}
         nav={nav}
         notify={notify}
       />
     ),
-    forgotpw: <ForgotPwPage nav={nav} notify={notify} />,
+    forgotpw: (
+      <ForgotPwPage forgotPassword={forgotPassword} nav={nav} notify={notify} />
+    ),
     catalog: (
       <CatalogPage
         orgs={approvedOrgs}
@@ -231,85 +370,20 @@ export default function App() {
             fontWeight: 600,
             boxShadow: "0 4px 20px rgba(0,0,0,0.15)",
             animation: "slideIn .3s ease",
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
           }}
         >
+          <span>{notification.type === "error" ? "⚠️" : "✅"}</span>
           {notification.msg}
         </div>
       )}
       <style>{`
         @keyframes slideIn { from { transform: translateX(40px); opacity: 0 } to { transform: translateX(0); opacity: 1 } }
-        @keyframes fadeUp { from { transform: translateY(20px); opacity: 0 } to { transform: translateY(0); opacity: 1 } }
         * { box-sizing: border-box; margin: 0; padding: 0; }
         button { cursor: pointer; }
         input, textarea, select { outline: none; font-family: inherit; }
-  /* ── Mobile Responsive ─────────────────────────────────────── */
-  @media (max-width: 768px) {
-    /* Navbar */
-    nav { padding: 0 16px !important; height: 56px !important; }
-    nav span[style*="fontSize: 18"] { font-size: 15px !important; }
-
-    /* Landing page - stack vertically */
-    .landing-split { flex-direction: column !important; }
-    .landing-left { flex: none !important; width: 100% !important; padding: 40px 28px !important; min-height: 0 !important; }
-    .landing-left h1 { font-size: 28px !important; }
-    .landing-left p { font-size: 14px !important; margin-bottom: 0 !important; }
-    .landing-features { display: none !important; }
-    .landing-right { flex: none !important; width: 100% !important; padding: 28px 20px !important; }
-
-    /* Catalog hero */
-    .catalog-hero { padding: 32px 16px 24px !important; }
-    .catalog-hero h1 { font-size: 24px !important; }
-
-    /* Grids → single column */
-    .org-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)) !important; gap: 10px !important; }
-    .two-col { grid-template-columns: 1fr !important; }
-    .three-col { grid-template-columns: 1fr 1fr !important; }
-    .emp-add-grid { grid-template-columns: 1fr !important; }
-    .stats-grid { grid-template-columns: 1fr 1fr !important; }
-
-    /* Org detail cover */
-    .org-cover { padding: 32px 16px 28px !important; }
-    .org-cover h1 { font-size: 22px !important; }
-    .org-cover-flex { flex-direction: column !important; gap: 16px !important; }
-
-    /* Dashboard */
-    .dash-header { flex-direction: column !important; gap: 14px !important; align-items: flex-start !important; }
-    .org-cards-grid { grid-template-columns: 1fr !important; }
-
-    /* OrgEditor header */
-    .editor-header { flex-wrap: wrap !important; gap: 10px !important; padding: 16px !important; }
-
-    /* Admin tabs */
-    .admin-tabs { width: 100% !important; flex-wrap: wrap !important; }
-    .admin-tabs button { flex: 1 !important; min-width: 0 !important; font-size: 12px !important; padding: 8px 10px !important; }
-
-    /* AddOrg form grid */
-    .add-org-grid { grid-template-columns: 1fr !important; }
-
-    /* General padding */
-    .page-pad { padding: 24px 16px !important; }
-    .card-pad { padding: 18px !important; }
-
-    /* Navbar buttons - smaller */
-    .nav-btn { padding: 6px 10px !important; font-size: 12px !important; }
-
-    /* Tab switcher */
-    .tab-switch button { font-size: 13px !important; padding: 9px 0 !important; }
-
-    /* Category pills wrap */
-    .cat-pills { gap: 6px !important; }
-    .cat-pills button { font-size: 12px !important; padding: 5px 12px !important; }
-  }
-
-  @media (max-width: 480px) {
-    .landing-left { padding: 28px 20px !important; }
-    .landing-left h1 { font-size: 24px !important; }
-    .org-grid { grid-template-columns: 1fr 1fr !important; }
-    .stats-grid { grid-template-columns: 1fr !important; }
-    .editor-header { padding: 14px !important; }
-    .editor-header .header-btns { width: 100% !important; justify-content: flex-end !important; }
-  }
-
       `}</style>
       {pages[effectivePage] || pages.home}
     </div>
@@ -1050,7 +1124,7 @@ function MField({ label, value, onChange, placeholder, type = "text" }) {
 }
 
 // ── Forgot Password ───────────────────────────────────────────────────────
-function ForgotPwPage({ nav, notify }) {
+function ForgotPwPage({ forgotPassword, nav, notify }) {
   const [email, setEmail] = useState("");
   const send = () => {
     if (!email) return notify("Имэйл оруулна уу", "error");
