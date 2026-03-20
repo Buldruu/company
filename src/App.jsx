@@ -70,34 +70,55 @@ export default function App() {
 
   // ── Auth listener ─────────────────────────────────────────────────────
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, async (fu) => {
-      if (fu) {
-        if (justLoggedIn.current) {
-          // Already set by login() — skip extra Firestore read
-          justLoggedIn.current = false;
-          setAuthLoading(false);
-          return;
-        }
-        // Page refresh: load from cache first, then Firestore
-        if (userCache[fu.uid]) {
-          setCurrentUser(userCache[fu.uid]);
-          setAuthLoading(false);
-          return;
-        }
-        const snap = await getDoc(doc(db, "users", fu.uid));
-        if (snap.exists()) {
-          const data = { uid: fu.uid, ...snap.data() };
-          userCache[fu.uid] = data;
-          setCurrentUser(data);
+    // Safety timeout: if Firebase doesn't respond in 5s, show login page
+    const timeout = setTimeout(() => {
+      setAuthLoading(false);
+    }, 5000);
+
+    let unsub = () => {};
+    try {
+      unsub = onAuthStateChanged(auth, async (fu) => {
+        clearTimeout(timeout);
+        if (fu) {
+          if (justLoggedIn.current) {
+            justLoggedIn.current = false;
+            setAuthLoading(false);
+            return;
+          }
+          if (userCache[fu.uid]) {
+            setCurrentUser(userCache[fu.uid]);
+            setAuthLoading(false);
+            return;
+          }
+          try {
+            const snap = await getDoc(doc(db, "users", fu.uid));
+            if (snap.exists()) {
+              const data = { uid: fu.uid, ...snap.data() };
+              userCache[fu.uid] = data;
+              setCurrentUser(data);
+            } else {
+              await signOut(auth);
+              setCurrentUser(null);
+            }
+          } catch (dbErr) {
+            console.error("Firestore read error:", dbErr);
+            setCurrentUser(null);
+          }
         } else {
           setCurrentUser(null);
         }
-      } else {
-        setCurrentUser(null);
-      }
+        setAuthLoading(false);
+      });
+    } catch (err) {
+      console.error("Auth init error:", err);
+      clearTimeout(timeout);
       setAuthLoading(false);
-    });
-    return unsub;
+    }
+
+    return () => {
+      clearTimeout(timeout);
+      unsub();
+    };
   }, []);
 
   // ── Realtime orgs ─────────────────────────────────────────────────────
@@ -132,12 +153,27 @@ export default function App() {
   // ── Login: fast path — set user immediately, skip onAuthStateChanged re-read
   const login = async (email, password) => {
     try {
+      // Step 1: Firebase Auth
       const cred = await signInWithEmailAndPassword(auth, email, password);
-      const snap = await getDoc(doc(db, "users", cred.user.uid));
+
+      // Step 2: Firestore-оос хэрэглэгчийн мэдээлэл унших
+      let snap;
+      try {
+        snap = await getDoc(doc(db, "users", cred.user.uid));
+      } catch (dbErr) {
+        await signOut(auth);
+        return notify("Firestore алдаа: " + dbErr.message, "error");
+      }
+
       if (!snap.exists()) {
         await signOut(auth);
-        return notify("Хэрэглэгч олдсонгүй", "error");
+        // User exists in Auth but not in Firestore — create basic record
+        return notify(
+          "Хэрэглэгчийн мэдээлэл Firestore-д байхгүй байна. Firebase Console → Firestore → users collection-д document үүсгэнэ үү.",
+          "error",
+        );
       }
+
       const data = snap.data();
       if (!data.approved) {
         await signOut(auth);
@@ -146,19 +182,24 @@ export default function App() {
           "error",
         );
       }
+
       const user = { uid: cred.user.uid, ...data };
       userCache[cred.user.uid] = user;
-      justLoggedIn.current = true; // tell onAuthStateChanged to skip
+      justLoggedIn.current = true;
       setCurrentUser(user);
       notify(`Тавтай морил, ${data.name}! 👋`);
       nav(data.role === "admin" ? "admin" : "catalog");
     } catch (e) {
-      notify(
-        e.code === "auth/invalid-credential"
-          ? "Имэйл эсвэл нууц үг буруу"
-          : e.message,
-        "error",
-      );
+      const msg =
+        {
+          "auth/invalid-credential": "Имэйл эсвэл нууц үг буруу",
+          "auth/user-not-found": "Энэ имэйл бүртгэлгүй байна",
+          "auth/wrong-password": "Нууц үг буруу байна",
+          "auth/too-many-requests": "Хэт олон оролдлого. Түр хүлээнэ үү.",
+          "auth/user-disabled": "Энэ данс идэвхгүй болсон байна",
+          "auth/network-request-failed": "Интернэт холболт алдаатай байна",
+        }[e.code] || "Алдаа [" + e.code + "]: " + e.message;
+      notify(msg, "error");
     }
   };
 
@@ -276,7 +317,10 @@ export default function App() {
             }}
           ></div>
           <div style={{ color: "#64748b", fontWeight: 600, fontSize: 15 }}>
-            Нэвтэрч байна...
+            Ачааллаж байна...
+          </div>
+          <div style={{ color: "#94a3b8", fontSize: 13, marginTop: 8 }}>
+            5 секундын дараа автоматаар нэвтрэх хуудас руу шилжинэ
           </div>
         </div>
       </div>
